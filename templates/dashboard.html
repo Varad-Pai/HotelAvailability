@@ -1,0 +1,118 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Hotel Availability – Dashboard</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
+  <style>
+    /* highlight today's tab */
+    .date-tab.today { background:#dc2626; color:#fff; font-weight:600; }
+    .date-tab.today.active { border-color:#b91c1c; box-shadow:0 0 0 2px rgba(220,38,38,.35); }
+  </style>
+</head>
+<body class="container">
+  <header class="header">
+    <div>
+      <h2>Hotel Availability</h2>
+      <div class="sub">Logged in as <b>{{ user }}</b> ({{ role }})</div>
+    </div>
+    <a class="btn" href="{{ url_for('logout') }}">Logout</a>
+  </header>
+
+  <!-- Date tabs (next 7 days) -->
+  <nav class="date-tabs">
+    {% set today = dates[0].isoformat() %}
+    {% for d in dates %}
+      {% set ds = d.isoformat() %}
+      <a class="date-tab {% if ds == selected_date %}active{% endif %} {% if ds == today %}today{% endif %}"
+         href="{{ url_for('dashboard') }}?date={{ ds }}">
+        <div class="dow">{{ d.strftime('%a') }}</div>
+        <div class="dom">{{ d.strftime('%d') }}</div>
+        <div class="mon">{{ d.strftime('%b') }}</div>
+      </a>
+    {% endfor %}
+  </nav>
+
+  <section class="legend">
+    <span class="pill vacant">Available</span>
+    <span class="pill occupied">Occupied</span>
+  </section>
+
+  <main>
+    {% for floor in [1,2,3,4] %}
+      <div class="floor-block">
+        <h3>Floor {{ floor }}</h3>
+        <div class="rooms-grid">
+          {% for r in floors[floor] %}
+            <button
+              id="room-{{ r.id }}"
+              class="room-btn {{ r.status }}"
+              {% if role == "receptionist" %}
+                onclick="toggleRoom('{{ r.id }}')"
+              {% else %}
+                disabled
+              {% endif %}
+              data-room="{{ r.room_no }}"
+            >
+              {{ r.room_no }}
+            </button>
+          {% endfor %}
+        </div>
+      </div>
+    {% endfor %}
+  </main>
+
+  <script>
+    const role = "{{ role | e }}";
+    const selectedDate = "{{ selected_date | e }}";
+    const socket = io();
+
+    function applyStatus(roomId, status) {
+      const el = document.getElementById("room-" + roomId);
+      if (!el) return;
+      el.classList.remove("vacant","occupied");
+      el.classList.add(status);
+    }
+
+    async function toggleRoom(roomId) {
+      if (role !== "receptionist") return;
+
+      // optimistic flip
+      const el = document.getElementById("room-" + roomId);
+      if (el) {
+        if (el.classList.contains("vacant")) {
+          el.classList.remove("vacant"); el.classList.add("occupied");
+        } else {
+          el.classList.remove("occupied"); el.classList.add("vacant");
+        }
+      }
+
+      try {
+        const res = await fetch("/api/toggle", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ room_id: parseInt(roomId), date: selectedDate })
+        });
+        if (!res.ok) throw new Error("Server rejected");
+        const data = await res.json();
+        // set to canonical value from server
+        applyStatus(roomId, data.status);
+      } catch (e) {
+        // revert on failure
+        if (el) {
+          if (el.classList.contains("vacant")) { el.classList.remove("vacant"); el.classList.add("occupied"); }
+          else { el.classList.remove("occupied"); el.classList.add("vacant"); }
+        }
+        alert("Failed to update room. Please try again.");
+      }
+    }
+
+    // Receive real-time updates (shareholders & receptionist)
+    socket.on("room_updated", (payload) => {
+      if (payload.date !== selectedDate) return;
+      applyStatus(payload.room_id, payload.status);
+    });
+  </script>
+</body>
+</html>

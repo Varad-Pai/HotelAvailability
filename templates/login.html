@@ -1,0 +1,27 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Hotel Availability – Login</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="container">
+  <div class="card center">
+    <h2>Hotel Availability</h2>
+    {% if error %}<div class="error">{{ error }}</div>{% endif %}
+    <form method="POST" class="form">
+      <label>Username</label>
+      <input type="text" name="username" required>
+      <label>Password</label>
+      <input type="password" name="password" required>
+      <button class="btn primary" type="submit">Login</button>
+    </form>
+
+    <div class="hint">
+      Demo users:<br>
+      shareholder / 123 (view-only)<br>
+      reception / 123 (can toggle)
+    </div>
+  </div>
+</body>
+</html> 
