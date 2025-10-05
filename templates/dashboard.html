@@ -10,6 +10,25 @@
     .date-tab.today { background:#dc2626; color:#fff; font-weight:600; }
     .date-tab.today.active { border-color:#b91c1c; box-shadow:0 0 0 2px rgba(220,38,38,.35); }
   </style>
+  <link rel="manifest" href="{{ url_for('static', filename='pwa/manifest.json') }}">
+<meta name="theme-color" content="#2563eb">
+
+<!-- iOS compatibility -->
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='pwa/icons/icon-192.png') }}">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
+<script>
+  // Register the service worker
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("/static/pwa/service-worker.js")
+        .then(reg => console.log("Service Worker registered:", reg))
+        .catch(err => console.error("Service Worker error:", err));
+    });
+  }
+</script>
+
 </head>
 <body class="container">
   <header class="header">
