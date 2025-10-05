@@ -13,151 +13,105 @@ socketio = SocketIO(app, async_mode="threading", cors_allowed_origins="*")
 DB_PATH = "rooms.db"
 
 
-# --- Database Connection (Dual Mode) ---
+# --- DB Connection (SQLite for local / Postgres for Render) ---
 def db():
     db_url = os.environ.get("DATABASE_URL")
     if db_url:
-        # Render / Postgres
         return psycopg2.connect(db_url, cursor_factory=DictCursor)
     else:
-        # Local SQLite
         return sqlite3.connect(DB_PATH, check_same_thread=False)
 
 
-# --- Database Initialization ---
+# --- Initialize Database ---
 def init_db():
+    """Initialize database schema and seed data."""
     con = db()
     cur = con.cursor()
 
-    # SQLite uses different types than Postgres, so we adjust slightly
-    try:
-        cur.execute("""
+    # Create tables (SQLite syntax)
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS users (
             username TEXT PRIMARY KEY,
             password TEXT NOT NULL,
             role TEXT CHECK(role IN ('shareholder','receptionist')) NOT NULL
         )
-        """)
-    except Exception:
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            username VARCHAR PRIMARY KEY,
-            password VARCHAR NOT NULL,
-            role VARCHAR NOT NULL CHECK (role IN ('shareholder','receptionist'))
-        )
-        """)
-
-    try:
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS rooms (
-            id SERIAL PRIMARY KEY,
-            floor INTEGER NOT NULL,
-            room_no INTEGER NOT NULL,
-            UNIQUE(floor, room_no)
-        )
-        """)
-    except Exception:
-        cur.execute("""
+    """)
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS rooms (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             floor INTEGER NOT NULL,
             room_no INTEGER NOT NULL,
             UNIQUE(floor, room_no)
         )
-        """)
-
-    try:
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS availability (
-            id SERIAL PRIMARY KEY,
-            room_id INTEGER NOT NULL,
-            date TEXT NOT NULL,
-            status TEXT NOT NULL CHECK(status IN ('vacant','occupied')),
-            UNIQUE(room_id, date)
-        )
-        """)
-    except Exception:
-        cur.execute("""
+    """)
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS availability (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             room_id INTEGER NOT NULL,
             date TEXT NOT NULL,
             status TEXT NOT NULL CHECK(status IN ('vacant','occupied')),
-            UNIQUE(room_id, date)
+            UNIQUE(room_id, date),
+            FOREIGN KEY(room_id) REFERENCES rooms(id) ON DELETE CASCADE
         )
-        """)
+    """)
 
     # Insert default users
-    try:
-        cur.execute("INSERT INTO users (username, password, role) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING", ("shareholder", "123", "shareholder"))
-        cur.execute("INSERT INTO users (username, password, role) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING", ("reception", "123", "receptionist"))
-    except Exception:
-        cur.execute("INSERT OR IGNORE INTO users VALUES (?,?,?)", ("shareholder", "123", "shareholder"))
-        cur.execute("INSERT OR IGNORE INTO users VALUES (?,?,?)", ("reception", "123", "receptionist"))
+    cur.execute("INSERT OR IGNORE INTO users VALUES ('shareholder','123','shareholder')")
+    cur.execute("INSERT OR IGNORE INTO users VALUES ('reception','123','receptionist')")
 
     # Insert rooms
     for floor in range(1, 5):
         for suffix in range(1, 8):
             room_no = floor * 100 + suffix
-            try:
-                cur.execute("INSERT INTO rooms (floor, room_no) VALUES (%s, %s) ON CONFLICT DO NOTHING", (floor, room_no))
-            except Exception:
-                cur.execute("INSERT OR IGNORE INTO rooms (floor, room_no) VALUES (?,?)", (floor, room_no))
+            cur.execute("INSERT OR IGNORE INTO rooms (floor, room_no) VALUES (?,?)", (floor, room_no))
 
-    # Initialize availability for next 7 days
+    # Insert availability for next 7 days
     today = datetime.date.today()
     cur.execute("SELECT id FROM rooms")
     room_ids = [r[0] for r in cur.fetchall()]
     for i in range(7):
         date_str = (today + datetime.timedelta(days=i)).isoformat()
         for room_id in room_ids:
-            try:
-                cur.execute(
-                    "INSERT INTO availability (room_id, date, status) VALUES (%s, %s, 'vacant') ON CONFLICT DO NOTHING",
-                    (room_id, date_str),
-                )
-            except Exception:
-                cur.execute(
-                    "INSERT OR IGNORE INTO availability (room_id, date, status) VALUES (?, ?, 'vacant')",
-                    (room_id, date_str),
-                )
+            cur.execute("""
+                INSERT OR IGNORE INTO availability (room_id, date, status)
+                VALUES (?, ?, 'vacant')
+            """, (room_id, date_str))
 
     con.commit()
     con.close()
+    print("✅ Database initialized successfully and all rooms added!")
 
 
-# --- Helper: Next 7 dates ---
+# --- Helper: Get next 7 dates ---
 def next_7_dates():
     today = datetime.date.today()
     return [(today + datetime.timedelta(days=i)) for i in range(7)]
 
 
-# --- Helper: Get availability for a date ---
+# --- Helper: Get rooms and status for selected date ---
 def get_availability_for_date(date_str):
+    """Return all rooms (vacant or occupied) for the selected date."""
     con = db()
     cur = con.cursor()
-    try:
-        cur.execute("""
-            SELECT rooms.id, rooms.floor, rooms.room_no, availability.status
-            FROM rooms
-            JOIN availability ON availability.room_id = rooms.id
-            WHERE availability.date = %s
-            ORDER BY rooms.floor ASC, rooms.room_no ASC
-        """, (date_str,))
-    except Exception:
-        cur.execute("""
-            SELECT rooms.id, rooms.floor, rooms.room_no, availability.status
-            FROM rooms
-            JOIN availability ON availability.room_id = rooms.id
-            WHERE availability.date = ?
-            ORDER BY rooms.floor ASC, rooms.room_no ASC
-        """, (date_str,))
+
+    # LEFT JOIN ensures even unbooked rooms appear
+    cur.execute("""
+        SELECT rooms.id, rooms.floor, rooms.room_no, 
+               COALESCE(availability.status, 'vacant')
+        FROM rooms
+        LEFT JOIN availability 
+        ON availability.room_id = rooms.id 
+        AND availability.date = ?
+        ORDER BY rooms.floor ASC, rooms.room_no ASC
+    """, (date_str,))
+
     rows = cur.fetchall()
     con.close()
 
+    # Properly integer-keyed floors
     floors = {1: [], 2: [], 3: [], 4: []}
     for room_id, floor, room_no, status in rows:
-        floors[floor].append({
+        floors[int(floor)].append({
             "id": room_id,
             "room_no": room_no,
             "status": status
@@ -171,13 +125,9 @@ def login():
     if request.method == "POST":
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "").strip()
-
         con = db()
         cur = con.cursor()
-        try:
-            cur.execute("SELECT role FROM users WHERE username=%s AND password=%s", (username, password))
-        except Exception:
-            cur.execute("SELECT role FROM users WHERE username=? AND password=?", (username, password))
+        cur.execute("SELECT role FROM users WHERE username=? AND password=?", (username, password))
         row = cur.fetchone()
         con.close()
 
@@ -207,36 +157,32 @@ def dashboard():
 
     selected = request.args.get("date") or datetime.date.today().isoformat()
 
+    # Always ensure availability exists for next 7 days
     con = db()
     cur = con.cursor()
-    # Ensure next 7 days exist
+    cur.execute("SELECT id FROM rooms")
+    room_ids = [r[0] for r in cur.fetchall()]
     today = datetime.date.today()
-    try:
-        cur.execute("SELECT id FROM rooms")
-        room_ids = [r[0] for r in cur.fetchall()]
-    except Exception:
-        con.close()
-        return "Database not initialized", 500
-
     for i in range(7):
         date_str = (today + datetime.timedelta(days=i)).isoformat()
         for room_id in room_ids:
-            try:
-                cur.execute("INSERT INTO availability (room_id, date, status) VALUES (%s, %s, 'vacant') ON CONFLICT DO NOTHING", (room_id, date_str))
-            except Exception:
-                cur.execute("INSERT OR IGNORE INTO availability (room_id, date, status) VALUES (?, ?, 'vacant')", (room_id, date_str))
-
+            cur.execute("""
+                INSERT OR IGNORE INTO availability (room_id, date, status)
+                VALUES (?, ?, 'vacant')
+            """, (room_id, date_str))
     con.commit()
     con.close()
 
     floors = get_availability_for_date(selected)
     dates = next_7_dates()
-    return render_template("dashboard.html",
-                           floors=floors,
-                           dates=dates,
-                           selected_date=selected,
-                           role=session["role"],
-                           user=session["username"])
+    return render_template(
+        "dashboard.html",
+        floors=floors,
+        dates=dates,
+        selected_date=selected,
+        role=session["role"],
+        user=session["username"]
+    )
 
 
 @app.post("/api/toggle")
@@ -250,38 +196,31 @@ def api_toggle():
 
     con = db()
     cur = con.cursor()
-
-    try:
-        cur.execute("SELECT status FROM availability WHERE room_id=%s AND date=%s", (room_id, date_str))
-    except Exception:
-        cur.execute("SELECT status FROM availability WHERE room_id=? AND date=?", (room_id, date_str))
+    cur.execute("SELECT status FROM availability WHERE room_id=? AND date=?", (room_id, date_str))
     row = cur.fetchone()
 
     if not row:
-        try:
-            cur.execute("INSERT INTO availability (room_id, date, status) VALUES (%s, %s, 'vacant')", (room_id, date_str))
-        except Exception:
-            cur.execute("INSERT INTO availability (room_id, date, status) VALUES (?, ?, 'vacant')", (room_id, date_str))
         current = "vacant"
+        cur.execute("INSERT INTO availability (room_id, date, status) VALUES (?, ?, 'vacant')", (room_id, date_str))
     else:
         current = row[0]
 
     new_status = "vacant" if current == "occupied" else "occupied"
-    try:
-        cur.execute("UPDATE availability SET status=%s WHERE room_id=%s AND date=%s", (new_status, room_id, date_str))
-    except Exception:
-        cur.execute("UPDATE availability SET status=? WHERE room_id=? AND date=?", (new_status, room_id, date_str))
-
+    cur.execute("UPDATE availability SET status=? WHERE room_id=? AND date=?", (new_status, room_id, date_str))
     con.commit()
     con.close()
 
     socketio.emit("room_updated", {"room_id": room_id, "date": date_str, "status": new_status})
     return {"ok": True, "status": new_status}
 
+
+# --- Manual Re-init Route ---
 @app.route("/init")
 def initialize():
+    if os.path.exists(DB_PATH):
+        os.remove(DB_PATH)
     init_db()
-    return "✅ Database initialized successfully!"
+    return "✅ Database initialized successfully and all rooms added!"
 
 
 if __name__ == "__main__":
