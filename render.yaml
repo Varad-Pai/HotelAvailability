@@ -2,8 +2,9 @@ services:
   - type: web
     name: hotel-app
     env: python
-    plan: free
+    plan: free         # upgrade to Starter for 24/7 reliability
     region: singapore
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn -k geventwebsocket.gunicorn.workers.GeventWebSocketWorker -w 1 --timeout 180 app:app
     autoDeploy: true
+    healthCheckPath: /
