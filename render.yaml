@@ -5,7 +5,5 @@ services:
     plan: free
     region: singapore
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn -k geventwebsocket.gunicorn.workers.GeventWebSocketWorker -w 1 -t 120 app:app
-    envVars:
-      - key: PYTHON_VERSION
-        value: 3.12.4
+    startCommand: gunicorn -k geventwebsocket.gunicorn.workers.GeventWebSocketWorker -w 1 --timeout 180 app:app
+    autoDeploy: true
