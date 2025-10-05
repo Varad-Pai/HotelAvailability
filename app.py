@@ -278,6 +278,11 @@ def api_toggle():
     socketio.emit("room_updated", {"room_id": room_id, "date": date_str, "status": new_status})
     return {"ok": True, "status": new_status}
 
+@app.route("/init")
+def initialize():
+    init_db()
+    return "✅ Database initialized successfully!"
+
 
 if __name__ == "__main__":
     init_db()
